@@ -30,7 +30,9 @@ import {
 import type { ReactNode } from "react";
 import { useEffect, useMemo, useState } from "react";
 import { partnerCenterAuthConfig } from "./authConfig";
+import { initClarity, trackClarityEvent } from "./clarity";
 import { learnBaseUrl, Scenario, scenarios } from "./data/scenarios";
+import { GrowthMarginCalculator, type PartnerCenterApiClient } from "./GrowthMarginCalculator";
 
 type HttpMethod = "GET" | "POST" | "PATCH" | "PUT" | "DELETE";
 
@@ -53,6 +55,8 @@ type SharedQuery = {
   requestHeaders: string;
   scenarioId?: string;
 };
+
+type AppPage = "explorer" | "growthMargin";
 
 const historyKey = "partner-center-api-explorer-history";
 const favoritesKey = "partner-center-api-explorer-favorites";
@@ -246,6 +250,25 @@ function getAuthErrorMessage(error: unknown) {
   return message;
 }
 
+function getApiErrorMessage(status: number, statusText: string, value: unknown) {
+  if (value && typeof value === "object") {
+    const errorValue = value as {
+      message?: string;
+      description?: string;
+      error?: { message?: string; description?: string };
+    };
+    return (
+      errorValue.error?.message ??
+      errorValue.error?.description ??
+      errorValue.message ??
+      errorValue.description ??
+      `${status} ${statusText}`
+    );
+  }
+
+  return `${status} ${statusText}`;
+}
+
 function renderJsonTokens(value: string) {
   const tokenPattern =
     /("(?:\\u[\da-fA-F]{4}|\\[^u]|[^\\"])*"(?=\s*:)|"(?:\\u[\da-fA-F]{4}|\\[^u]|[^\\"])*"|true|false|null|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)/g;
@@ -381,6 +404,7 @@ export default function App() {
   const [wizardOpen, setWizardOpen] = useState(() => localStorage.getItem(wizardDismissedKey) !== "true");
   const [wizardStep, setWizardStep] = useState(0);
   const [expandedCategories, setExpandedCategories] = useState<Record<string, boolean>>({});
+  const [appPage, setAppPage] = useState<AppPage>("explorer");
 
   const msal = useMemo(
     () =>
@@ -396,6 +420,11 @@ export default function App() {
       }),
     [],
   );
+
+  useEffect(() => {
+    initClarity();
+    trackClarityEvent("api_explorer_opened");
+  }, []);
 
   useEffect(() => {
     let mounted = true;
@@ -458,8 +487,10 @@ export default function App() {
       msal.setActiveAccount(response.account);
       setAccount(response.account);
       setProfileOpen(false);
+      trackClarityEvent("sign_in_completed");
     } catch (error) {
       setAuthMessage(getAuthErrorMessage(error));
+      trackClarityEvent("sign_in_failed");
     } finally {
       setBusy(false);
     }
@@ -499,6 +530,43 @@ export default function App() {
       return msal.acquireTokenPopup({ scopes: partnerCenterAuthConfig.scopes, account });
     }
   }
+
+  const requestPartnerCenterJson: PartnerCenterApiClient = async <T,>(requestEndpoint: string, options: RequestInit = {}) => {
+    const token = await acquireToken();
+    const headers = new Headers(options.headers);
+
+    if (!headers.has("Accept")) {
+      headers.set("Accept", "application/json");
+    }
+
+    if (options.body && !headers.has("Content-Type")) {
+      headers.set("Content-Type", "application/json");
+    }
+
+    headers.set("Authorization", `Bearer ${token.accessToken}`);
+    headers.set("MS-RequestId", crypto.randomUUID());
+    headers.set("MS-CorrelationId", crypto.randomUUID());
+
+    const response = await fetch(normalizeEndpoint(requestEndpoint), {
+      ...options,
+      headers,
+    });
+    const responseText = await response.text();
+    let parsed: unknown = null;
+    if (responseText) {
+      try {
+        parsed = JSON.parse(responseText);
+      } catch {
+        parsed = { message: responseText };
+      }
+    }
+
+    if (!response.ok) {
+      throw new Error(getApiErrorMessage(response.status, response.statusText, parsed));
+    }
+
+    return parsed as T;
+  };
 
   async function sendRequest() {
     setBusy(true);
@@ -665,6 +733,26 @@ export default function App() {
           <div className="suite-brand">
             <strong>Partner Center API Explorer</strong>
           </div>
+          <nav className="page-nav" aria-label="Application pages">
+            <button
+              className={`page-nav-button ${appPage === "explorer" ? "active" : ""}`}
+              onClick={() => {
+                setAppPage("explorer");
+                trackClarityEvent("api_explorer_opened");
+              }}
+            >
+              API Explorer
+            </button>
+            <button
+              className={`page-nav-button ${appPage === "growthMargin" ? "active" : ""}`}
+              onClick={() => {
+                setAppPage("growthMargin");
+                trackClarityEvent("growth_margin_calculator_opened");
+              }}
+            >
+              Growth Margin Calculator
+            </button>
+          </nav>
         </div>
         <div className="suite-actions">
           <button className="header-icon-button" onClick={launchWizard} aria-label="Launch getting started wizard" title="Getting started">
@@ -698,12 +786,24 @@ export default function App() {
               )}
             </div>
           ) : (
-            <button className="primary" onClick={signIn} disabled={busy}>
-              <span className="button-content">
-                <Person24Regular />
-                {busy ? "Opening sign in..." : "Sign in"}
-              </span>
-            </button>
+            <div className="sign-in-callout-anchor">
+              <div className="sign-in-callout" role="status">
+                <div className="sign-in-callout-icon">
+                  <Person24Regular />
+                </div>
+                <div>
+                  <strong>Use your CSP work or school account</strong>
+                  <span>Sign in to use this tool. We do not capture or store your Partner Center data.</span>
+                  <em>Secure Microsoft sign-in</em>
+                </div>
+              </div>
+              <button className="primary" onClick={signIn} disabled={busy}>
+                <span className="button-content">
+                  <Person24Regular />
+                  {busy ? "Opening sign in..." : "Sign in"}
+                </span>
+              </button>
+            </div>
           )}
         </div>
       </header>
@@ -711,6 +811,9 @@ export default function App() {
       {authMessage && <p className="message danger">{authMessage}</p>}
       {shareMessage && <div className="toast success-toast" role="status">{shareMessage}</div>}
 
+      {appPage === "growthMargin" ? (
+        <GrowthMarginCalculator account={account} requestJson={requestPartnerCenterJson} />
+      ) : (
       <section className="layout">
         <aside className="panel side-panel">
           <div className="tab-list" role="tablist" aria-label="Explorer side panel">
@@ -936,7 +1039,7 @@ export default function App() {
               </select>
               <div className="endpoint-group">
                 <input
-                  className="input endpoint-input"
+                  className="input endpoint-input clarity-mask"
                   aria-label="API endpoint"
                   value={endpoint}
                   onChange={(event) => setEndpoint(event.target.value)}
@@ -960,7 +1063,7 @@ export default function App() {
               </button>
             </div>
             {urlParameters.length > 0 && (
-              <div className="parameter-grid">
+              <div className="parameter-grid clarity-mask">
                 {urlParameters.map((name) => (
                   <label key={name}>
                     {name}
@@ -1006,7 +1109,7 @@ export default function App() {
             {requestTab === "body" ? (
               <div>
                 <textarea
-                  className="input code-box"
+                  className="input code-box clarity-mask"
                   aria-label="JSON request body"
                   value={body}
                   onChange={(event) => setBody(event.target.value)}
@@ -1017,7 +1120,7 @@ export default function App() {
               <label>
                 Headers
                 <textarea
-                  className="input code-box header-box"
+                  className="input code-box header-box clarity-mask"
                   value={requestHeaders}
                   onChange={(event) => setRequestHeaders(event.target.value)}
                   placeholder="Header-Name: value"
@@ -1071,16 +1174,19 @@ export default function App() {
               </button>
             </div>
             {responseTab === "body" ? (
-              <JsonFormatter value={result?.body ?? ""} />
+              <div className="clarity-mask">
+                <JsonFormatter value={result?.body ?? ""} />
+              </div>
             ) : (
-              <pre className="response-box headers-view">
+              <pre className="response-box headers-view clarity-mask">
                 {result?.headers || "Run a request to see the response headers."}
               </pre>
             )}
           </section>
         </section>
       </section>
-      {responseExpanded && (
+      )}
+      {appPage === "explorer" && responseExpanded && (
         <div className="modal-backdrop" role="presentation">
           <section className="response-modal" role="dialog" aria-modal="true" aria-label="Expanded response viewer">
             <div className="modal-header">
@@ -1118,9 +1224,11 @@ export default function App() {
             </div>
             <div className="modal-content">
               {expandedResponseTab === "body" ? (
-                <JsonFormatter value={result?.body ?? ""} />
+                <div className="clarity-mask">
+                  <JsonFormatter value={result?.body ?? ""} />
+                </div>
               ) : (
-                <pre className="response-box headers-view">
+                <pre className="response-box headers-view clarity-mask">
                   {result?.headers || "Run a request to see the response headers."}
                 </pre>
               )}
