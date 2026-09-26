@@ -920,9 +920,7 @@ export function GrowthMarginCalculator({ account, requestJson }: GrowthMarginCal
       <section className="pricing-calculator-shell">
         <section className="pricing-products-area">
           <div className="pricing-tabs" role="tablist" aria-label="Growth margin calculator sections">
-            <button className="pricing-tab active">Products</button>
-            <button className="pricing-tab" disabled>Saved estimates</button>
-            <button className="pricing-tab" disabled>FAQs</button>
+            <button className="pricing-tab active">Growth Margin Products</button>
           </div>
 
           <div className="pricing-instruction-bar">

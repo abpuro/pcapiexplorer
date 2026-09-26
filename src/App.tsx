@@ -62,6 +62,7 @@ const historyKey = "partner-center-api-explorer-history";
 const favoritesKey = "partner-center-api-explorer-favorites";
 const shareQueryParam = "pcq";
 const wizardDismissedKey = "partner-center-api-explorer-wizard-dismissed";
+const feedbackIssueUrl = "https://github.com/abpuro/pcapiexplorer/issues/new";
 const defaultRequestHeaders = `Accept: application/json
 Content-Type: application/json`;
 
@@ -248,6 +249,38 @@ function getAuthErrorMessage(error: unknown) {
   }
 
   return message;
+}
+
+function getFeedbackUrl(page: AppPage) {
+  const pageName = page === "growthMargin" ? "Growth Margin Calculator" : "API Explorer";
+  const body = [
+    "## What were you trying to do?",
+    "",
+    "Describe the workflow or feature.",
+    "",
+    "## What happened?",
+    "",
+    "Describe the issue or feedback.",
+    "",
+    "## What did you expect?",
+    "",
+    "Describe the expected behavior.",
+    "",
+    "## Page",
+    "",
+    pageName,
+    "",
+    "## Privacy reminder",
+    "",
+    "Please do not include customer names, tenant IDs, API tokens, request/response bodies, or Partner Center data.",
+  ].join("\n");
+  const params = new URLSearchParams({
+    title: `Feedback: ${pageName}`,
+    body,
+    labels: "feedback",
+  });
+
+  return `${feedbackIssueUrl}?${params}`;
 }
 
 function getApiErrorMessage(status: number, statusText: string, value: unknown) {
@@ -755,6 +788,15 @@ export default function App() {
           </nav>
         </div>
         <div className="suite-actions">
+          <a
+            className="header-feedback-button"
+            href={getFeedbackUrl(appPage)}
+            target="_blank"
+            rel="noreferrer"
+            onClick={() => trackClarityEvent("feedback_opened")}
+          >
+            <span>Feedback</span>
+          </a>
           <button className="header-icon-button" onClick={launchWizard} aria-label="Launch getting started wizard" title="Getting started">
             <QuestionCircle24Regular />
           </button>
@@ -792,7 +834,7 @@ export default function App() {
                   <Person24Regular />
                 </div>
                 <div>
-                  <strong>Use your CSP work or school account</strong>
+                  <strong>Use your CSP work account</strong>
                   <span>Sign in to use this tool. We do not capture or store your Partner Center data.</span>
                   <em>Secure Microsoft sign-in</em>
                 </div>
